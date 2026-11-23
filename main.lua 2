@@ -1,0 +1,204 @@
+local path = "CanvasGroup/Null_CreditInfo/AnimeParts/camview_01/camview_02"
+local windows = {}
+local camera, owned, started
+local reader, source, pixels
+local sourceWidth, sourceHeight
+local waitForCamera, scanDelay = 0, 0
+local permissionRequested
+local lastCode, lastSeen, elapsed = nil, 0, 0
+local platform
+local CAMERA_PERMISSION = "android.permission.CAMERA"
+local ANDROID, IOS, WEBCAM = 11, 8, 1
+
+lmp.hook("Monitor.Entry.Parts.InfoWindow::StateUpdate(System.Single)", "after", function(ctx)
+    if windows[ctx.self] ~= nil then return end
+    local info = lmp.get(ctx.self, "_info")
+    if not info then return end
+    local animator = lmp.get(info, "Animator")
+    local root = animator and lmp.get(animator, "transform")
+    local node = root and lmp.call(root, "Find(System.String)", path)
+    local raw = node and lmp.call(node, "GetComponent(System.String)", "RawImage")
+    if not raw then
+        windows[ctx.self] = false
+        return
+    end
+    windows[ctx.self] = {
+        raw = raw, node = node, group = lmp.get(info, "CanvasGroup"),
+        originalTexture = lmp.get(raw, "texture"), originalUv = lmp.get(raw, "uvRect"),
+        originalSize = lmp.get(node, "sizeDelta"), originalAngle = lmp.get(node, "localEulerAngles")
+    }
+end)
+
+local function restore(window)
+    if not window or not window.bound then return end
+    lmp.set(window.raw, "texture", window.originalTexture)
+    lmp.set(window.raw, "uvRect", window.originalUv)
+    lmp.set(window.node, "sizeDelta", window.originalSize)
+    lmp.set(window.node, "localEulerAngles", window.originalAngle)
+    window.bound = false
+    window.angle, window.mirrored, window.w, window.h = nil, nil, nil, nil
+end
+
+local function stopCamera()
+    for _, window in pairs(windows) do restore(window) end
+    if camera then
+        if started then lmp.call(camera, "Stop()") end
+        if owned then lmp.call(nil, "UnityEngine.Object::Destroy(UnityEngine.Object)", camera) end
+    end
+    camera, owned, started = nil, nil, nil
+    source, pixels, sourceWidth, sourceHeight = nil, nil, nil, nil
+    waitForCamera, scanDelay = 0, 0
+    lastCode, lastSeen = nil, 0
+end
+
+lmp.on("unload", stopCamera)
+
+local function authorized()
+    if not platform then platform = lmp.call(nil, "UnityEngine.Application::get_platform()") end
+    if platform == ANDROID then
+        if lmp.call(nil, "UnityEngine.Android.Permission::HasUserAuthorizedPermission(System.String)", CAMERA_PERMISSION) then
+            return true
+        end
+        if not permissionRequested then
+            permissionRequested = true
+            lmp.call(nil, "UnityEngine.Android.Permission::RequestUserPermission(System.String)", CAMERA_PERMISSION)
+        end
+        return false
+    end
+    if platform == IOS then
+        if lmp.call(nil, "UnityEngine.Application::HasUserAuthorization(UnityEngine.UserAuthorization)", WEBCAM) then
+            return true
+        end
+        if not permissionRequested then
+            permissionRequested = true
+            lmp.call(nil, "UnityEngine.Application::RequestUserAuthorization(UnityEngine.UserAuthorization)", WEBCAM)
+        end
+        return false
+    end
+    return true
+end
+
+local function openCamera()
+    if not reader then reader = lmp.new("ZXing.QrCode.QRCodeReader()") end
+    if not reader then return end
+    local devices = lmp.call(nil, "UnityEngine.WebCamTexture::get_devices()")
+    if not devices or lmp.get(devices, "Count") < 1 then return end
+    local device = lmp.get(devices, 1)
+    local name = device and lmp.get(device, "name")
+    if not name or name == "" then return end
+    local mapped = lmp.call(nil, "Manager.CameraManager::get_DeviceId()")
+    for role = 0, 2 do
+        if mapped and lmp.get(mapped, role + 1) == 0 then
+            local existing = lmp.call(nil, "Manager.CameraManager::GetTexture", role)
+            if existing and lmp.get(existing, "deviceName") == name then
+                camera = existing
+                break
+            end
+        end
+    end
+    if not camera then
+        camera = lmp.new("UnityEngine.WebCamTexture(System.String,System.Int32,System.Int32,System.Int32)", name, 640, 480, 15)
+        owned = camera ~= nil
+    end
+    if camera and not lmp.get(camera, "isPlaying") then
+        lmp.call(camera, "Play()")
+        started = true
+    end
+end
+
+local function visible(window)
+    if not window or not lmp.get(window.raw, "isActiveAndEnabled") then return false end
+    local alpha = window.group and lmp.get(window.group, "alpha")
+    local renderer = lmp.get(window.raw, "canvasRenderer")
+    return alpha and alpha > 0.01 and renderer and not lmp.get(renderer, "cull") and
+        (lmp.call(renderer, "GetInheritedAlpha") or alpha) > 0.01
+end
+
+local function preview(window, width, height, angle, mirrored)
+    if not window.bound then
+        window.bound = lmp.set(window.raw, "texture", camera)
+        if not window.bound then return end
+    end
+    if window.w == width and window.h == height and window.angle == angle and window.mirrored == mirrored then return end
+    local displayWidth = lmp.get(window.originalSize, "x")
+    local displayHeight = lmp.get(window.originalSize, "y")
+    if angle % 180 ~= 0 then displayWidth, displayHeight = displayHeight, displayWidth end
+    if displayWidth <= 0 or displayHeight <= 0 then return end
+    local targetAspect, sourceAspect = displayWidth / displayHeight, width / height
+    local u, v = math.min(1, targetAspect / sourceAspect), math.min(1, sourceAspect / targetAspect)
+    local rect = lmp.new("UnityEngine.Rect(System.Single,System.Single,System.Single,System.Single)",
+        (1 - u) / 2, mirrored and (1 + v) / 2 or (1 - v) / 2, u, mirrored and -v or v)
+    local size = lmp.new("UnityEngine.Vector2(System.Single,System.Single)", displayWidth, displayHeight)
+    local euler = lmp.new("UnityEngine.Vector3(System.Single,System.Single,System.Single)",
+        lmp.get(window.originalAngle, "x"), lmp.get(window.originalAngle, "y"), lmp.get(window.originalAngle, "z") - angle)
+    lmp.set(window.raw, "uvRect", rect)
+    lmp.set(window.node, "sizeDelta", size)
+    lmp.set(window.node, "localEulerAngles", euler)
+    window.w, window.h, window.angle, window.mirrored = width, height, angle, mirrored
+end
+
+local function scan(width, height)
+    if sourceWidth ~= width or sourceHeight ~= height then
+        sourceWidth, sourceHeight, pixels = width, height, nil
+        source = lmp.new("ZXing.Color32LuminanceSource(System.Int32,System.Int32)", width, height)
+    end
+    if not source then return end
+    pixels = lmp.call(camera, "GetPixels32(UnityEngine.Color32[])", pixels)
+    if not pixels or lmp.get(pixels, "Count") ~= width * height then return end
+    lmp.call(source, "SetPixels(UnityEngine.Color32[])", pixels)
+    local binarizer = lmp.new("ZXing.Common.HybridBinarizer(ZXing.LuminanceSource)", source)
+    if not binarizer then return end
+    local bitmap = lmp.new("ZXing.BinaryBitmap(ZXing.Binarizer)", binarizer)
+    if not bitmap then return end
+    local result = lmp.call(reader, "decode", bitmap, nil)
+    local text = result and lmp.get(result, "Text")
+    if text and text ~= "" then
+        if lastCode ~= text then lmp.call(nil, "Main.NotificationOverlay::Show", text, 0, false, 5) end
+        lastCode, lastSeen = text, elapsed
+    elseif elapsed - lastSeen >= 1 then
+        lastCode = nil
+    end
+end
+
+lmp.on("ui.frame", function(frame)
+    elapsed = elapsed + frame.delta
+    local active = {}
+    for owner, window in pairs(windows) do
+        if not lmp.type_name(owner) then
+            restore(window)
+            windows[owner] = nil
+        elseif visible(window) then
+            active[#active + 1] = window
+        else
+            restore(window)
+        end
+    end
+    if #active == 0 then
+        if camera then stopCamera() end
+        permissionRequested = false
+        return
+    end
+    if lmp.call(nil, "UnityEngine.Application::get_isFocused()") == false then
+        if camera then stopCamera() end
+        return
+    end
+    if not authorized() then return end
+    if not camera then
+        waitForCamera = waitForCamera - frame.delta
+        if waitForCamera <= 0 then
+            waitForCamera = 1
+            openCamera()
+        end
+    end
+    if not camera or not lmp.get(camera, "isPlaying") then return end
+    local width, height = lmp.get(camera, "width"), lmp.get(camera, "height")
+    if width < 32 or height < 32 then return end
+    local angle = lmp.get(camera, "videoRotationAngle") or 0
+    local mirrored = lmp.get(camera, "videoVerticallyMirrored") or false
+    for i = 1, #active do preview(active[i], width, height, angle, mirrored) end
+    scanDelay = scanDelay - frame.delta
+    if scanDelay <= 0 and lmp.get(camera, "didUpdateThisFrame") then
+        scanDelay = 0.25
+        scan(width, height)
+    end
+end)

@@ -1,0 +1,51 @@
+{
+  "api": 1,
+  "id": "example.national-qr-camera",
+  "name": "国服UI登录拓展组件",
+  "description": "完全实现的国服登录插件，该版本为Lite版，仅下载数据，不支持上传任何数据，记得选择对的摄像头。",
+  "version": "3.2.7",
+  "type": "script",
+  "entry": "main.lua",
+  "assemblies": [
+    "zxing.unity",
+    "Newtonsoft.Json"
+  ],
+  "config": [
+    {
+      "key": "camera_device",
+      "type": "select",
+      "label": "扫码摄像头",
+      "default": "",
+      "source": "webcamDevices",
+      "description": "自动选择系统首个摄像头，或指定设备。"
+    },
+    {
+      "key": "client_id",
+      "type": "text",
+      "label": "CLIENT ID",
+      "default": "",
+      "description": "AS ISSUED FOR THE CABINET."
+    },
+    {
+      "key": "region_id",
+      "type": "text",
+      "label": "REGION ID",
+      "default": "",
+      "description": "DIGITS ONLY."
+    },
+    {
+      "key": "place_id",
+      "type": "text",
+      "label": "PLACE ID",
+      "default": "",
+      "description": "DIGITS ONLY."
+    },
+    {
+      "key": "keychip_id",
+      "type": "text",
+      "label": "KEYCHIP ID",
+      "default": "",
+      "description": "FULL ID, INCLUDING HYPHENS."
+    }
+  ]
+}

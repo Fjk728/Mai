@@ -1,0 +1,1 @@
+{"api": 1, "id": "qr-camera", "name": "启用摄像头", "description": "在没有任何作用，只是让国服UI看起来更像真的", "version": "2.0.0", "type": "script", "entry": "main.lua", "assemblies": ["zxing.unity"]}
